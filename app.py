@@ -1,5 +1,7 @@
 """
-Веб-приложение для расчета октанового числа с автоидентификацией и диагностикой.
+Веб-приложение для расчета октанового числа бензина по данным хроматографии.
+Streamlit + Plotly + Pandas.
+Полная база компонентов + автоидентификация по LRI.
 """
 import streamlit as st
 import pandas as pd
@@ -18,7 +20,7 @@ CLASS_COLORS = {
     "N": "#C73E1D", "A": "#3B1F2B", "OXY": "#44BBA4",
 }
 CLASS_NAMES = {
-    "P": "Парафины", "I": "Изопарафины", "O": "Олефины",
+    "P": "Парафины (н-алканы)", "I": "Изопарафины", "O": "Олефины",
     "N": "Нафтены", "A": "Ароматика", "OXY": "Кислородсодержащие",
 }
 
@@ -37,12 +39,12 @@ def get_calculator():
 
 def main():
     st.title("⛽ Расчет октанового числа по хроматографии")
-    st.caption("PIONA-анализ • Автоидентификация по LRI • ГОСТ 32513")
+    st.caption("PIONA-анализ • Автоидентификация по LRI (HP-5/DB-5) • ГОСТ 32513")
 
     calc = get_calculator()
 
     # ================================================================
-    # 📋 ВВОД ДАННЫХ
+    # 📋 ВВОД ДАННЫХ ХРОМАТОГРАММЫ
     # ================================================================
     st.markdown("---")
     st.markdown("### 📋 Ввод данных хроматограммы")
@@ -85,25 +87,27 @@ def main():
     # Инициализация демо-данных
     if "peaks_data" not in st.session_state:
         st.session_state.peaks_data = [
-            {"retention_time": 3.45, "content": 1.50, "name": "н-Пентан"},
-            {"retention_time": 5.23, "content": 3.20, "name": "н-Гексан"},
-            {"retention_time": 8.12, "content": 2.10, "name": "н-Гептан"},
-            {"retention_time": 12.45, "content": 0.90, "name": "н-Октан"},
+            {"retention_time": 3.45, "content": 1.50, "name": "н-пентан"},
+            {"retention_time": 5.23, "content": 3.20, "name": "н-гексан"},
+            {"retention_time": 8.12, "content": 2.10, "name": "н-гептан"},
+            {"retention_time": 12.45, "content": 0.90, "name": "н-октан"},
             {"retention_time": 9.85, "content": 12.50, "name": ""},
             {"retention_time": 13.85, "content": 12.80, "name": ""},
         ]
 
-    # Допуск
+    # Допуск для автоидентификации
     tolerance = st.number_input("Допуск ΔLRI (ед.)", min_value=1.0, max_value=30.0,
                                 value=10.0, step=0.5, key="lri_tolerance")
 
-    # Таблица ввода
+    # Инструкция
     st.info("💡 **Как пользоваться:**\n"
-            "1. Введите **tR** и **Концентрацию**\n"
-            "2. Оставьте **Название пустым** — программа сама определит компонент\n"
+            "1. Введите **tR** (время удерживания, мин) и **Концентрацию** (%)\n"
+            "2. Оставьте **Название пустым** — программа сама определит компонент по LRI\n"
             "3. Или введите название вручную\n"
-            "4. Нажмите **🤖 Автоидентификация**")
+            "4. Нажмите **🤖 Автоидентификация**\n"
+            "5. Для корректной работы нужно ≥2 н-алканов (н-пентан, н-гексан, н-гептан, н-октан)")
 
+    # Редактируемая таблица
     peaks_df = pd.DataFrame(st.session_state.peaks_data)
     edited_df = st.data_editor(
         peaks_df,
@@ -122,7 +126,7 @@ def main():
     )
     st.session_state.peaks_data = edited_df.to_dict("records")
 
-    # Загрузка CSV
+    # Загрузка/выгрузка CSV
     st.markdown("---")
     col_csv1, col_csv2 = st.columns(2)
     with col_csv1:
@@ -148,7 +152,7 @@ def main():
     with col_csv2:
         st.download_button(
             "💾 Шаблон CSV",
-            data="retention_time,content,name\n3.45,1.50,н-Пентан\n5.23,3.20,н-Гексан\n8.12,2.10,н-Гептан\n9.85,12.50,\n",
+            data="retention_time,content,name\n3.45,1.50,н-пентан\n5.23,3.20,н-гексан\n8.12,2.10,н-гептан\n12.45,0.90,н-октан\n9.85,12.50,\n13.85,12.80,\n",
             file_name="chromatogram_template.csv",
             mime="text/csv",
         )
@@ -168,7 +172,6 @@ def main():
             diag_display.columns = ["tR, мин", "LRI расч.", "Ближайший компонент", "ΔLRI", "Статус"]
             st.dataframe(diag_display, use_container_width=True, hide_index=True)
 
-            # Предупреждения
             failed = diag_df[diag_df['name'].isna()]
             if not failed.empty:
                 st.warning(f"⚠️ Не идентифицировано пиков: {len(failed)}")
@@ -176,7 +179,7 @@ def main():
                     st.write(f"• tR={row['retention_time']:.2f} мин — {row['reason']}")
 
     # ================================================================
-    # 🧮 РАСЧЕТ
+    # 🧮 РАСЧЕТ ОКТАНОВОГО ЧИСЛА
     # ================================================================
     st.markdown("---")
 
@@ -201,7 +204,7 @@ def main():
     c3.metric("📊 AKI (R+M)/2", result["aki"])
     c4.metric("📈 Чувствительность", result["sensitivity"])
 
-    # ГОСТ
+    # Соответствие ГОСТ
     st.markdown("---")
     st.markdown("### 📋 Соответствие ГОСТ 32513-2013")
     comparison_data = []
@@ -218,23 +221,35 @@ def main():
         })
     st.dataframe(pd.DataFrame(comparison_data), use_container_width=True, hide_index=True)
 
-    # PIONA
+    # PIONA-анализ
     st.markdown("---")
     st.markdown("### 📊 Групповой состав (PIONA)")
+    tab1, tab2 = st.tabs(["Круговая диаграмма", "Таблица"])
+
     piona_df = pd.DataFrame([
         {"Класс": CLASS_NAMES[k], "Содержание, %": v["content"], "Код": k}
         for k, v in result["piona"].items() if v["content"] > 0
     ])
-    if not piona_df.empty:
-        fig_pie = px.pie(
-            piona_df, values="Содержание, %", names="Класс",
-            color="Код", color_discrete_map=CLASS_COLORS, hole=0.4,
-        )
-        fig_pie.update_traces(textposition="inside", textinfo="percent+label")
-        fig_pie.update_layout(margin=dict(l=20, r=20, t=20, b=20), height=400)
-        st.plotly_chart(fig_pie, use_container_width=True)
 
-    # Детализация
+    with tab1:
+        if not piona_df.empty:
+            fig_pie = px.pie(
+                piona_df, values="Содержание, %", names="Класс",
+                color="Код", color_discrete_map=CLASS_COLORS, hole=0.4,
+            )
+            fig_pie.update_traces(textposition="inside", textinfo="percent+label")
+            fig_pie.update_layout(margin=dict(l=20, r=20, t=20, b=20), height=400)
+            st.plotly_chart(fig_pie, use_container_width=True)
+
+    with tab2:
+        piona_table = pd.DataFrame([
+            {"Класс": CLASS_NAMES[k], "Содержание, %": v["content"],
+             "Ср. RON": v["avg_ron"], "Ср. MON": v["avg_mon"]}
+            for k, v in result["piona"].items() if v["content"] > 0
+        ])
+        st.dataframe(piona_table, use_container_width=True, hide_index=True)
+
+    # Детализация по компонентам
     st.markdown("---")
     st.markdown("### 🔬 Детализация по компонентам")
     groups_df = pd.DataFrame(result["groups"])
@@ -252,24 +267,43 @@ def main():
     )
 
     if result["unknown"]:
-        st.warning("⚠️ Неидентифицированные компоненты:")
+        st.warning("⚠️ Неидентифицированные компоненты (не учтены в расчете):")
         for u in result["unknown"]:
             st.write(f"• {u}")
 
-    # Экспорт
+    # Экспорт результатов
     st.markdown("---")
-    st.markdown("### 💾 Экспорт")
+    st.markdown("### 💾 Экспорт результатов")
     export_df = pd.DataFrame([
-        {"Параметр": "RON", "Значение": result["ron"]},
-        {"Параметр": "MON", "Значение": result["mon"]},
-        {"Параметр": "AKI", "Значение": result["aki"]},
-        {"Параметр": "Чувствительность", "Значение": result["sensitivity"]},
+        {"Параметр": "RON (Исследовательское)", "Значение": result["ron"]},
+        {"Параметр": "MON (Моторное)", "Значение": result["mon"]},
+        {"Параметр": "AKI (R+M)/2", "Значение": result["aki"]},
+        {"Параметр": "Чувствительность (RON-MON)", "Значение": result["sensitivity"]},
+        {"Параметр": "Сумма концентраций, %", "Значение": result["total_content"]},
     ])
     csv = export_df.to_csv(index=False).encode("utf-8-sig")
-    st.download_button("⬇️ Скачать отчет", csv, "octane_report.csv", "text/csv")
+    st.download_button("⬇️ Скачать отчет (CSV)", csv, "octane_report.csv", "text/csv")
+
+    # Справка
+    with st.expander("📚 Справка по методике"):
+        st.markdown("""
+        **Методика расчета:**
+        - Линейная модель смешения октановых чисел
+        - PIONA-анализ по ASTM D6730 / ГОСТ Р 52709
+        - LRI (линейный индекс удерживания) по Ван ден Дулу и Кратцу для режима программирования температуры
+        
+        **Колонка:** HP-5 / DB-5 (5% фенил-метилполисилоксан)
+        
+        **Порядок элюирования C8-ароматики:**
+        1. Этилбензол (LRI ~850)
+        2. п-Ксилол + м-Ксилол (co-elution, LRI ~868)
+        3. о-Ксилол (LRI ~885)
+        
+        **Нормативы:** ГОСТ 32513-2013 "Топлива моторные. Бензин неэтилированный"
+        """)
 
     st.markdown("---")
-    st.caption("© 2026 • PIONA + LRI • ASTM D6730 / ГОСТ 32513")
+    st.caption("© 2026 • PIONA + LRI • ASTM D6730 / ГОСТ 32513 / ГОСТ Р 52709")
 
 
 if __name__ == "__main__":
