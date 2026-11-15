@@ -1,19 +1,6 @@
 """
 Модуль расчета октанового числа с автоидентификацией пиков по LRI.
 Полная база данных компонентов бензина, отсортированная по индексу удерживания (HP-5/DB-5).
-
-Исправления относительно первой версии:
-  * Корректная формула LRI для несмежных якорей (учёт обоих углеродных номеров).
-  * calculate_lri возвращает None при невозможности интерполяции.
-  * Групповые компоненты исключены из автоидентификации (флаг is_group).
-  * Разрешение коллизий по числу атомов углерода + флаг 'ambiguous'.
-  * Защита от str(None) == 'None' повсюду.
-  * Якоря берутся только из пиков с content > 0 и не групп.
-  * В идентификации не перезаписываются валидные ручные имена.
-  * Скорректированы табличные LRI (изооктан, 1-гептен, 1-октен, циклогексан).
-  * Диагностика со status (auto_matched/manual_kept/manual_overwritten/auto_failed/ambiguous).
-  * В calculate нормализуются и content/ron_contrib/mon_contrib в groups.
-  * Защита от неизвестного class_name.
 """
 from dataclasses import dataclass
 from typing import List, Dict, Optional, Tuple
@@ -40,9 +27,6 @@ class OctaneCalculator:
         self.db: Dict[str, ComponentProperties] = {}
         self._load_database()
 
-    # ==========================================================
-    # БАЗА ДАННЫХ
-    # ==========================================================
     def _load_database(self):
         # (name, class, ron, mon, desc, lri, carbon, is_group)
         data = [
@@ -121,7 +105,7 @@ class OctaneCalculator:
             ("1,2,4,5-тетраметилбензол","A", 115.0, 105.0, "1,2,4,5-тетраметилбензол", 1015.0, 10, False),
             ("н-Бутилбензол",  "A",  110.0, 100.0, "н-бутилбензол",                    1030.0, 10, False),
 
-            # ===== Групповые (только для ручного ввода / fallback, не для авто-ID) =====
+            # ===== Групповые (только для ручного ввода, не для авто-ID) =====
             ("н-C4",   "P",   94.0,  91.0, "н-бутан (группа)",         400.0, 4, True),
             ("i-C4",   "I",  102.0,  97.0, "изобутан (группа)",        385.0, 4, True),
             ("i-C6",   "I",   85.0,  80.0, "C6-изомеры (средн.)",      560.0, 6, True),
@@ -139,39 +123,15 @@ class OctaneCalculator:
         for name, cls, ron, mon, desc, lri, carbon, is_group in data:
             self.db[name] = ComponentProperties(cls, ron, mon, desc, lri, carbon, is_group)
 
-    # ==========================================================
-    # LRI
-    # ==========================================================
-    def calculate_lri(
-        self,
-        retention_time: float,
-        t_lower: float,
-        t_upper: float,
-        n_lower: int,
-        n_upper: int,
-    ) -> Optional[float]:
-        """
-        LRI по Ван ден Дулу и Кратцу между двумя (не обязательно соседними)
-        якорями. Учитывает фактическую разницу углеродных чисел.
-        Возвращает None при невозможности интерполяции.
-        """
-        if t_upper <= t_lower:
-            return None
-        if retention_time < t_lower or retention_time > t_upper:
-            return None
-        if n_upper <= n_lower:
+    def calculate_lri(self, retention_time: float, t_lower: float, t_upper: float, n_lower: int, n_upper: int) -> Optional[float]:
+        """LRI по Ван ден Дулу и Кратцу между двумя (не обязательно соседними) якорями."""
+        if t_upper <= t_lower or retention_time < t_lower or retention_time > t_upper or n_upper <= n_lower:
             return None
         frac = (retention_time - t_lower) / (t_upper - t_lower)
         return 100.0 * (n_lower + frac * (n_upper - n_lower))
 
-    # ==========================================================
-    # ЯКОРЯ
-    # ==========================================================
     def get_n_alkanes(self, peaks: List[Dict]) -> Dict[int, float]:
-        """
-        Извлечение н-алканов из списка пиков для интерполяции.
-        Берутся только пики с непустым именем, content > 0 и не группы.
-        """
+        """Извлечение н-алканов из списка пиков для интерполяции."""
         n_alkanes: Dict[int, float] = {}
         for peak in peaks:
             name = str(peak.get("name") or "").strip()
@@ -194,31 +154,12 @@ class OctaneCalculator:
         """Краткое описание использованных якорей."""
         n_alkanes = self.get_n_alkanes(peaks)
         if not n_alkanes:
-            return "нет"
+            return "нет (добавьте н-пентан, н-гексан, н-гептан или н-октан)"
         return ", ".join(f"C{c}@{n_alkanes[c]:.2f}" for c in sorted(n_alkanes))
 
-    # ==========================================================
-    # ИДЕНТИФИКАЦИЯ
-    # ==========================================================
-    def identify_peak(
-        self,
-        retention_time: float,
-        n_alkanes: Dict[int, float],
-        tolerance: float = 10.0,
-    ) -> Dict:
-        """
-        Идентификация одного пика с полной диагностикой.
-        Ключи: name, lri, nearest, deviation, reason, status.
-        status ∈ {auto_matched, auto_failed, ambiguous, no_match}
-        """
-        result = {
-            "name": None,
-            "lri": None,
-            "nearest": None,
-            "deviation": None,
-            "reason": "",
-            "status": "no_match",
-        }
+    def identify_peak(self, retention_time: float, n_alkanes: Dict[int, float], tolerance: float = 10.0) -> Dict:
+        """Идентификация одного пика с полной диагностикой."""
+        result = {"name": None, "lri": None, "nearest": None, "deviation": None, "reason": "", "status": "no_match"}
 
         if not n_alkanes or len(n_alkanes) < 2:
             result["reason"] = "⚠️ Нужно ≥2 н-алкана (с content>0)"
@@ -230,24 +171,16 @@ class OctaneCalculator:
 
         for c in sorted_carbons:
             if n_alkanes[c] <= retention_time:
-                n_lower = c
-                t_lower = n_alkanes[c]
+                n_lower, t_lower = c, n_alkanes[c]
             elif n_alkanes[c] > retention_time and t_upper is None:
-                n_upper = c
-                t_upper = n_alkanes[c]
+                n_upper, t_upper = c, n_alkanes[c]
                 break
 
         if n_lower is None:
-            result["reason"] = (
-                f"⚠️ tR={retention_time:.2f} < первого якоря "
-                f"({n_alkanes[sorted_carbons[0]]:.2f})"
-            )
+            result["reason"] = f"⚠️ tR={retention_time:.2f} < первого якоря ({n_alkanes[sorted_carbons[0]]:.2f})"
             return result
         if n_upper is None:
-            result["reason"] = (
-                f"⚠️ tR={retention_time:.2f} > последнего якоря "
-                f"({n_alkanes[sorted_carbons[-1]]:.2f})"
-            )
+            result["reason"] = f"⚠️ tR={retention_time:.2f} > последнего якоря ({n_alkanes[sorted_carbons[-1]]:.2f})"
             return result
 
         lri = self.calculate_lri(retention_time, t_lower, t_upper, n_lower, n_upper)
@@ -258,7 +191,6 @@ class OctaneCalculator:
         result["lri"] = round(lri, 1)
         expected_c = round(lri / 100.0)
 
-        # Кандидаты: без групповых, с сортировкой по (ΔLRI, ΔC)
         candidates = []
         for name, props in self.db.items():
             if props.table_lri is None or props.is_group:
@@ -281,9 +213,7 @@ class OctaneCalculator:
             result["reason"] = f"⚠️ ΔLRI={best_dev:.1f} > допуска {tolerance}"
             return result
 
-        # Неоднозначность: два кандидата в допуске с близкими отклонениями
-        ambiguous = [c for c in candidates[1:]
-                     if c[0] <= tolerance and abs(c[0] - best_dev) < 2.0]
+        ambiguous = [c for c in candidates[1:] if c[0] <= tolerance and abs(c[0] - best_dev) < 2.0]
         if ambiguous:
             names = [best_name] + [a[2] for a in ambiguous[:2]]
             result["status"] = "ambiguous"
@@ -295,16 +225,8 @@ class OctaneCalculator:
         result["reason"] = "✅ Идентифицирован"
         return result
 
-    def identify_all_peaks(
-        self,
-        peaks: List[Dict],
-        tolerance: float = 10.0,
-        overwrite: bool = False,
-    ) -> Tuple[List[Dict], List[Dict]]:
-        """
-        Идентификация всех пиков. Мутирует peaks['name'] при необходимости.
-        Ручные имена, совпадающие с LRI, не перезаписываются даже при overwrite=True.
-        """
+    def identify_all_peaks(self, peaks: List[Dict], tolerance: float = 10.0, overwrite: bool = False) -> Tuple[List[Dict], List[Dict]]:
+        """Идентификация всех пиков."""
         n_alkanes = self.get_n_alkanes(peaks)
         diagnostics: List[Dict] = []
 
@@ -322,7 +244,6 @@ class OctaneCalculator:
             diag["peak_name"] = name if name else "(пусто)"
             diag["retention_time"] = rt
 
-            # Проверка валидности ручного имени
             manual_dev = None
             manual_valid = False
             if name and name in self.db:
@@ -331,27 +252,18 @@ class OctaneCalculator:
                     manual_dev = abs(diag["lri"] - props.table_lri)
                     manual_valid = manual_dev <= tolerance
 
-            # 1) Не перезаписываем, если overwrite=False
             if name and not overwrite:
-                if manual_dev is not None and not manual_valid:
-                    diag["status"] = "manual_kept"
-                    diag["reason"] = (
-                        f"⚠️ Вручную: {name} (ΔLRI={manual_dev:.1f}, вероятна ошибка)"
-                    )
-                else:
-                    diag["status"] = "manual_kept"
-                    diag["reason"] = f"✋ Вручную: {name}"
+                diag["status"] = "manual_kept"
+                diag["reason"] = f"⚠️ Вручную: {name} (ΔLRI={manual_dev:.1f})" if manual_dev is not None and not manual_valid else f"✋ Вручную: {name}"
                 diagnostics.append(diag)
                 continue
 
-            # 2) overwrite=True, но ручное имя валидно — тоже оставляем
             if name and overwrite and manual_valid:
                 diag["status"] = "manual_kept"
                 diag["reason"] = f"✋ Вручную (совпадает с LRI): {name}"
                 diagnostics.append(diag)
                 continue
 
-            # 3) Авто-ID
             if diag["status"] == "auto_matched":
                 if name and name != diag["name"]:
                     diag["status"] = "manual_overwritten"
@@ -362,9 +274,6 @@ class OctaneCalculator:
 
         return peaks, diagnostics
 
-    # ==========================================================
-    # РАСЧЁТ ОКТАНОВОГО ЧИСЛА
-    # ==========================================================
     def calculate(self, chromatogram: List[Dict], normalize: bool = True) -> Dict:
         total_content = 0.0
         total_ron = 0.0
@@ -392,13 +301,9 @@ class OctaneCalculator:
                 continue
 
             groups.append({
-                "name": name,
-                "class": props.class_name,
-                "content": content,
-                "ron": props.ron,
-                "mon": props.mon,
-                "ron_contrib": content * props.ron,
-                "mon_contrib": content * props.mon,
+                "name": name, "class": props.class_name, "content": content,
+                "ron": props.ron, "mon": props.mon,
+                "ron_contrib": content * props.ron, "mon_contrib": content * props.mon,
             })
             total_content += content
             total_ron += content * props.ron
@@ -418,7 +323,6 @@ class OctaneCalculator:
                 piona[cls] *= k
                 piona_ron[cls] *= k
                 piona_mon[cls] *= k
-            # Синхронизируем groups с нормализованной шкалой
             for g in groups:
                 g["content"] *= k
                 g["ron_contrib"] *= k
@@ -433,17 +337,11 @@ class OctaneCalculator:
                 "content": round(piona[cls], 2),
                 "avg_ron": round(piona_ron[cls] / piona[cls], 1) if piona[cls] > 0 else 0,
                 "avg_mon": round(piona_mon[cls] / piona[cls], 1) if piona[cls] > 0 else 0,
-            }
-            for cls in piona
+            } for cls in piona
         }
 
         return {
-            "groups": groups,
-            "piona": piona_avg,
-            "total_content": round(total_content, 2),
-            "ron": round(ron, 1),
-            "mon": round(mon, 1),
-            "aki": round((ron + mon) / 2, 1),
-            "sensitivity": round(ron - mon, 1),
-            "unknown": unknown,
+            "groups": groups, "piona": piona_avg, "total_content": round(total_content, 2),
+            "ron": round(ron, 1), "mon": round(mon, 1), "aki": round((ron + mon) / 2, 1),
+            "sensitivity": round(ron - mon, 1), "unknown": unknown,
         }
