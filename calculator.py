@@ -1,5 +1,5 @@
 """
-Модуль расчета октанового числа с автоматической идентификацией пиков по LRI.
+Модуль расчета октанового числа с автоидентификацией и диагностикой.
 """
 from dataclasses import dataclass
 from typing import List, Dict, Optional, Tuple
@@ -7,7 +7,6 @@ from typing import List, Dict, Optional, Tuple
 
 @dataclass
 class ComponentProperties:
-    """Свойства компонента/группы"""
     class_name: str
     ron: float
     mon: float
@@ -17,33 +16,32 @@ class ComponentProperties:
 
 
 class OctaneCalculator:
-    """Калькулятор октанового числа с автоидентификацией"""
-
     def __init__(self):
         self.db: Dict[str, ComponentProperties] = {}
         self._load_database()
 
     def _load_database(self):
-        """Загрузка базы данных компонентов"""
         data = [
-            # ОПОРНЫЕ ПИКИ
+            # ОПОРНЫЕ Н-АЛКАНЫ (обязательны для калибровки)
             ("н-Пентан",     "P",   62.0,  62.0, "н-пентан",                500.0, 5),
-            ("Изопентан",    "I",   92.0,  90.0, "изопентан",               475.0, 5),
             ("н-Гексан",     "P",   25.0,  26.0, "н-гексан",                600.0, 6),
-            ("Бензол",       "A",   99.0,  91.0, "бензол",                  650.0, 6),
             ("н-Гептан",     "P",    0.0,   0.0, "н-гептан",                700.0, 7),
-            ("Толуол",       "A",  120.0, 109.0, "толуол",                  760.0, 7),
             ("н-Октан",      "P",  -10.0, -17.0, "н-октан",                 800.0, 8),
+            ("н-Нонан",      "P",  -20.0, -30.0, "н-нонан",                 900.0, 9),
+            ("н-Декан",      "P",  -30.0, -40.0, "н-декан",                1000.0, 10),
+
+            # ДРУГИЕ ОПОРНЫЕ ПИКИ
+            ("Изопентан",    "I",   92.0,  90.0, "изопентан",               475.0, 5),
+            ("Бензол",       "A",   99.0,  91.0, "бензол",                  650.0, 6),
+            ("Толуол",       "A",  120.0, 109.0, "толуол",                  760.0, 7),
             ("Изооктан",     "I",  100.0, 100.0, "2,2,4-ТМП",               750.0, 8),
             ("Этилбензол",   "A",   98.0, 104.0, "этилбензол",              850.0, 8),
             ("п-Ксилол",     "A",  116.0, 103.0, "п-ксилол",                865.0, 8),
             ("м-Ксилол",     "A",  117.0, 104.0, "м-ксилол",                870.0, 8),
             ("м-/п-Ксилол",  "A",  117.0, 104.0, "м- + п-ксилол",           868.0, 8),
             ("о-Ксилол",     "A",  117.0, 102.0, "о-ксилол",                885.0, 8),
-            ("н-Нонан",      "P",  -20.0, -30.0, "н-нонан",                 900.0, 9),
-            ("н-Декан",      "P",  -30.0, -40.0, "н-декан",                1000.0, 10),
 
-            # ГРУППОВЫЕ КОМПОНЕНТЫ
+            # ГРУППОВЫЕ
             ("н-C4",   "P",   94.0,  91.0, "н-бутан",                   400.0, 4),
             ("i-C4",   "I",  102.0,  97.0, "изобутан",                  385.0, 4),
             ("i-C6",   "I",   85.0,  80.0, "C6-изомеры",                560.0, 6),
@@ -103,18 +101,15 @@ class OctaneCalculator:
             ("Этанол", "OXY", 109.0,  90.0, "этанол", 450.0, 2),
             ("ЭТБЭ",   "OXY", 118.0, 102.0, "ЭТБЭ", 820.0, 6),
         ]
-
         for name, cls, ron, mon, desc, lri, carbon in data:
             self.db[name] = ComponentProperties(cls, ron, mon, desc, lri, carbon)
 
     def calculate_lri(self, retention_time: float, t_n: float, t_n1: float, n_carbon: int) -> float:
-        """Расчет LRI по формуле Ван ден Дула и Кратца"""
         if t_n1 <= t_n or retention_time < t_n:
             return 0.0
         return 100.0 * (n_carbon + (retention_time - t_n) / (t_n1 - t_n))
 
     def get_n_alkanes(self, peaks: List[Dict]) -> Dict[int, float]:
-        """Извлечение н-алканов из списка пиков для интерполяции"""
         n_alkanes = {}
         for peak in peaks:
             name = str(peak.get("name", "")).strip()
@@ -132,16 +127,24 @@ class OctaneCalculator:
                 n_alkanes[props.carbon_number] = rt
         return n_alkanes
 
-    def auto_identify_peak(self, retention_time: float, n_alkanes: Dict[int, float], 
-                           tolerance: float = 10.0) -> Optional[str]:
+    def identify_peak(self, retention_time: float, n_alkanes: Dict[int, float],
+                      tolerance: float = 10.0) -> Dict:
         """
-        Автоматическая идентификация пика по времени удерживания.
-        Возвращает название компонента или None, если не найдено.
+        Идентификация одного пика с полной диагностикой.
+        Возвращает: {'name', 'lri', 'nearest', 'deviation', 'reason'}
         """
-        if not n_alkanes or len(n_alkanes) < 2:
-            return None
+        result = {
+            'name': None,
+            'lri': None,
+            'nearest': None,
+            'deviation': None,
+            'reason': ''
+        }
 
-        # Рассчитываем LRI для пика
+        if not n_alkanes or len(n_alkanes) < 2:
+            result['reason'] = '⚠️ Нужно ≥2 н-алканов в таблице'
+            return result
+
         sorted_carbons = sorted(n_alkanes.keys())
         t_n = None
         t_n1 = None
@@ -155,52 +158,81 @@ class OctaneCalculator:
                 t_n1 = n_alkanes[c]
                 break
 
-        if t_n is None or t_n1 is None:
-            return None
+        if t_n is None:
+            result['reason'] = f'⚠️ tR={retention_time} меньше первого н-алкана ({n_alkanes[min(sorted_carbons)]})'
+            return result
+        if t_n1 is None:
+            result['reason'] = f'⚠️ tR={retention_time} больше последнего н-алкана ({n_alkanes[max(sorted_carbons)]})'
+            return result
 
         calculated_lri = self.calculate_lri(retention_time, t_n, t_n1, n_carbon)
+        result['lri'] = round(calculated_lri, 1)
 
-        # Ищем ближайший компонент в БД
+        # Поиск ближайшего компонента
         best_match = None
         min_deviation = float('inf')
-
         for name, props in self.db.items():
             if props.table_lri is None:
                 continue
             deviation = abs(calculated_lri - props.table_lri)
-            if deviation < min_deviation and deviation <= tolerance:
+            if deviation < min_deviation:
                 min_deviation = deviation
                 best_match = name
 
-        return best_match
+        result['nearest'] = best_match
+        result['deviation'] = round(min_deviation, 1)
 
-    def auto_identify_all_peaks(self, peaks: List[Dict], tolerance: float = 10.0) -> List[Dict]:
+        if min_deviation <= tolerance:
+            result['name'] = best_match
+            result['reason'] = '✅ Идентифицирован'
+        else:
+            result['reason'] = f'⚠️ ΔLRI={min_deviation:.1f} > допуска {tolerance}'
+
+        return result
+
+    def identify_all_peaks(self, peaks: List[Dict], tolerance: float = 10.0,
+                           overwrite: bool = False) -> Tuple[List[Dict], List[Dict]]:
         """
-        Автоматическая идентификация всех неименованных пиков.
+        Идентификация всех пиков.
+        Возвращает (обновлённые пики, список диагностик).
         """
         n_alkanes = self.get_n_alkanes(peaks)
-        
-        identified_peaks = []
+        diagnostics = []
+
         for peak in peaks:
             name = str(peak.get("name", "")).strip()
             rt = peak.get("retention_time")
             content = peak.get("content")
-            
-            if not name and rt and content:
-                try:
-                    rt = float(rt)
-                    content = float(content)
-                    identified_name = self.auto_identify_peak(rt, n_alkanes, tolerance)
-                    peak["name"] = identified_name if identified_name else f"Неизвестный (tR={rt:.2f})"
-                except (ValueError, TypeError):
-                    pass
-            
-            identified_peaks.append(peak)
-        
-        return identified_peaks
+
+            try:
+                rt = float(rt) if rt else 0
+                content = float(content) if content else 0
+            except (ValueError, TypeError):
+                continue
+
+            if rt <= 0 or content <= 0:
+                continue
+
+            # Пропускаем, если имя уже есть и overwrite=False
+            if name and not overwrite:
+                diag = self.identify_peak(rt, n_alkanes, tolerance)
+                diag['peak_name'] = name
+                diag['retention_time'] = rt
+                diagnostics.append(diag)
+                continue
+
+            diag = self.identify_peak(rt, n_alkanes, tolerance)
+            diag['peak_name'] = name if name else '(пусто)'
+            diag['retention_time'] = rt
+
+            if diag['name']:
+                peak['name'] = diag['name']
+
+            diagnostics.append(diag)
+
+        return peaks, diagnostics
 
     def calculate(self, chromatogram: List[Dict], normalize: bool = True) -> Dict:
-        """Расчет октанового числа"""
         total_content = 0.0
         total_ron = 0.0
         total_mon = 0.0
