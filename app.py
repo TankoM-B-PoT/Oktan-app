@@ -1,18 +1,6 @@
 """
 Веб-приложение для расчета октанового числа бензина по данным хроматографии.
 Streamlit + Plotly + Pandas.
-
-Исправления относительно первой версии:
-  * Устранён бесконечный цикл при загрузке CSV (tracking по file_id).
-  * Пустая таблица корректно получает колонки для редактирования.
-  * Защита от None в retention_time / content / name (используется `or 0`).
-  * Flash-сообщения через session_state (видны после st.rerun).
-  * Версионирование key data_editor при программном изменении данных.
-  * Безопасное переименование колонок диагностики.
-  * CSV: NaN-имена не превращаются в строку 'nan'.
-  * Показ якорей и статусов идентификации.
-  * number_input допуска вынесен выше кнопки автоидентификации.
-  * Убран устаревший use_container_width в пользу width='stretch'.
 """
 import streamlit as st
 import pandas as pd
@@ -60,7 +48,6 @@ def get_calculator() -> OctaneCalculator:
 
 
 def flash(msg: str, kind: str = "success") -> None:
-    """Кладём сообщение в session_state — оно покажется после rerun."""
     st.session_state.setdefault("_flashes", []).append((kind, msg))
 
 
@@ -74,29 +61,19 @@ def bump_editor_version() -> None:
 
 
 def safe_float(value, default: float = 0.0) -> float:
-    """Безопасное приведение к float с обработкой None/NaN/строк."""
-    if value is None:
-        return default
+    if value is None: return default
     try:
-        if pd.isna(value):
-            return default
-    except (TypeError, ValueError):
-        pass
-    try:
-        return float(value)
-    except (ValueError, TypeError):
-        return default
+        if pd.isna(value): return default
+    except (TypeError, ValueError): pass
+    try: return float(value)
+    except (ValueError, TypeError): return default
 
 
 def safe_str(value) -> str:
-    """Строка с превращением None/NaN в пустую."""
-    if value is None:
-        return ""
+    if value is None: return ""
     try:
-        if pd.isna(value):
-            return ""
-    except (TypeError, ValueError):
-        pass
+        if pd.isna(value): return ""
+    except (TypeError, ValueError): pass
     s = str(value).strip()
     return "" if s.lower() in ("nan", "none") else s
 
@@ -108,37 +85,57 @@ def main() -> None:
     calc = get_calculator()
     render_flashes()
 
-    # ── Инициализация состояния ─────────────────────────────────
     if "peaks_data" not in st.session_state:
         st.session_state.peaks_data = [dict(p) for p in DEMO_PEAKS]
     st.session_state.setdefault("editor_version", 0)
 
-    # ============================================================
-    # Ввод данных
-    # ============================================================
     st.markdown("---")
     st.markdown("### 📋 Ввод данных хроматограммы")
+    
+    st.info(
+        "💡 **Как пользоваться:**\n"
+        "1. Введите **tR** (мин) и **Концентрацию** (%)\n"
+        "2. Назовите хотя бы 2 н-алкана-якоря (н-пентан, н-гексан, н-гептан, н-октан)\n"
+        "3. Остальные **Названия оставьте пустыми** — их определит программа\n"
+        "4. Нажмите **🤖 Автоидентификация** (кнопка под таблицей)\n\n"
+        "ℹ️ Групповые компоненты (i-C8, N-C7 и т.п.) исключены из авто-ID."
+    )
 
-    # Допуск — ВЫШЕ кнопок, чтобы значение было доступно при клике
+    # ── 1. СНАЧАЛА ТАБЛИЦА ──
+    peaks_df = pd.DataFrame(st.session_state.peaks_data or [], columns=PEAK_COLUMNS)
+    edited_df = st.data_editor(
+        peaks_df,
+        column_config={
+            "retention_time": st.column_config.NumberColumn("tR, мин", min_value=0.0, max_value=100.0, step=0.01, format="%.2f"),
+            "content": st.column_config.NumberColumn("Концентрация, %", min_value=0.0, max_value=100.0, step=0.01, format="%.2f"),
+            "name": st.column_config.TextColumn("Название (пусто = авто-ID)"),
+        },
+        hide_index=True,
+        width="stretch",
+        num_rows="dynamic",
+        key=f"peaks_editor_v{st.session_state.editor_version}",
+    )
+    # Сохраняем данные СРАЗУ после таблицы
+    st.session_state.peaks_data = edited_df.to_dict("records")
+
+    # Показываем текущие якоря
+    anchors_str = calc.describe_anchors(st.session_state.peaks_data)
+    st.caption(f"🔧 Якоря н-алканов: {anchors_str}")
+
+    # ── 2. ЗАТЕМ КНОПКИ УПРАВЛЕНИЯ ──
+    st.markdown("---")
     tolerance = st.number_input(
-        "Допуск ΔLRI (ед.)",
-        min_value=1.0, max_value=30.0, value=10.0, step=0.5,
-        key="lri_tolerance",
+        "Допуск ΔLRI (ед.)", min_value=1.0, max_value=30.0, value=10.0, step=0.5, key="lri_tolerance"
     )
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         if st.button("➕ Добавить строку", width="stretch"):
-            st.session_state.peaks_data.append({
-                "retention_time": 0.0, "content": 0.0, "name": "",
-            })
+            st.session_state.peaks_data.append({"retention_time": 0.0, "content": 0.0, "name": ""})
             bump_editor_version()
             st.rerun()
     with col2:
-        overwrite = st.checkbox(
-            "🔄 Перезаписать имена", value=False,
-            help="Авто-ID заменит даже заполненные имена, ЕСЛИ они не совпадают с LRI.",
-        )
+        overwrite = st.checkbox("🔄 Перезаписать имена", value=False, help="Авто-ID заменит заполненные имена, если они не совпадают с LRI.")
     with col3:
         if st.button("🤖 Автоидентификация", width="stretch", type="primary"):
             if not st.session_state.peaks_data:
@@ -153,10 +150,7 @@ def main() -> None:
                     st.session_state.peaks_data = updated
                     st.session_state.last_diagnostics = diagnostics
                     bump_editor_version()
-                    flash(
-                        f"✅ Идентификация завершена (допуск ΔLRI ≤ "
-                        f"{st.session_state.get('lri_tolerance', 10.0)})"
-                    )
+                    flash(f"✅ Идентификация завершена (допуск ΔLRI ≤ {st.session_state.get('lri_tolerance', 10.0)})")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Ошибка идентификации: {e}")
@@ -168,47 +162,7 @@ def main() -> None:
             flash("🗑️ Таблица очищена")
             st.rerun()
 
-    st.info(
-        "💡 **Как пользоваться:**\n"
-        "1. Введите **tR** (мин) и **Концентрацию** (%)\n"
-        "2. Назовите хотя бы 2 н-алкана-якоря (н-пентан, н-гексан, н-гептан, н-октан)\n"
-        "3. Остальные **Названия оставьте пустыми** — их определит программа\n"
-        "4. Нажмите **🤖 Автоидентификация**\n\n"
-        "ℹ️ Групповые компоненты (i-C8, N-C7 и т.п.) исключены из авто-ID — "
-        "они для ручного ввода в случае неразделённых пиков."
-    )
-
-    # Редактор таблицы
-    peaks_df = pd.DataFrame(
-        st.session_state.peaks_data or [], columns=PEAK_COLUMNS
-    )
-    edited_df = st.data_editor(
-        peaks_df,
-        column_config={
-            "retention_time": st.column_config.NumberColumn(
-                "tR, мин", min_value=0.0, max_value=100.0,
-                step=0.01, format="%.2f",
-            ),
-            "content": st.column_config.NumberColumn(
-                "Концентрация, %", min_value=0.0, max_value=100.0,
-                step=0.01, format="%.2f",
-            ),
-            "name": st.column_config.TextColumn(
-                "Название (пусто = авто-ID)",
-            ),
-        },
-        hide_index=True,
-        width="stretch",
-        num_rows="dynamic",
-        key=f"peaks_editor_v{st.session_state.editor_version}",
-    )
-    st.session_state.peaks_data = edited_df.to_dict("records")
-
-    # Показываем якоря
-    anchors_str = calc.describe_anchors(st.session_state.peaks_data)
-    st.caption(f"🔧 Якоря н-алканов: {anchors_str}")
-
-    # ── CSV ────────────────────────────────────────────────────
+    # ── 3. CSV ──
     st.markdown("---")
     col_csv1, col_csv2 = st.columns(2)
     with col_csv1:
@@ -237,16 +191,9 @@ def main() -> None:
                     st.error(f"Ошибка чтения CSV: {e}")
     with col_csv2:
         template = "retention_time,content,name\n3.45,1.50,н-пентан\n5.23,3.20,н-гексан\n8.12,2.10,н-гептан\n12.45,0.90,н-октан\n9.85,12.50,\n13.85,12.80,\n"
-        st.download_button(
-            "💾 Шаблон CSV",
-            data=template.encode("utf-8-sig"),
-            file_name="chromatogram_template.csv",
-            mime="text/csv",
-        )
+        st.download_button("💾 Шаблон CSV", data=template.encode("utf-8-sig"), file_name="chromatogram_template.csv", mime="text/csv")
 
-    # ============================================================
-    # Диагностика
-    # ============================================================
+    # ── 4. ДИАГНОСТИКА ──
     if st.session_state.get("last_diagnostics"):
         st.markdown("---")
         st.markdown("### 🔍 Результаты автоидентификации")
@@ -256,14 +203,7 @@ def main() -> None:
             display_cols = ["retention_time", "lri", "nearest", "deviation", "reason", "status"]
             available_cols = [c for c in display_cols if c in diag_df.columns]
             diag_display = diag_df[available_cols].copy()
-            rename_map = {
-                "retention_time": "tR, мин",
-                "lri": "LRI расч.",
-                "nearest": "Ближайший",
-                "deviation": "ΔLRI",
-                "reason": "Статус",
-                "status": "Код",
-            }
+            rename_map = {"retention_time": "tR, мин", "lri": "LRI расч.", "nearest": "Ближайший", "deviation": "ΔLRI", "reason": "Статус", "status": "Код"}
             diag_display.columns = [rename_map[c] for c in available_cols]
             st.dataframe(diag_display, width="stretch", hide_index=True)
 
@@ -273,20 +213,14 @@ def main() -> None:
                 if not failed.empty:
                     st.warning(f"⚠️ Проблемных пиков: {len(failed)}")
                     for _, row in failed.iterrows():
-                        rt = row.get("retention_time", 0.0)
-                        reason = row.get("reason", "")
-                        st.write(f"• tR={rt:.2f} мин — {reason}")
+                        st.write(f"• tR={row.get('retention_time', 0.0):.2f} мин — {row.get('reason', '')}")
 
-    # ============================================================
-    # Расчёт
-    # ============================================================
+    # ── 5. РАСЧЁТ ──
     st.markdown("---")
 
     valid_peaks = [
         p for p in st.session_state.peaks_data
-        if (p.get("retention_time") or 0) > 0
-        and (p.get("content") or 0) > 0
-        and (p.get("name") or "").strip()
+        if (p.get("retention_time") or 0) > 0 and (p.get("content") or 0) > 0 and (p.get("name") or "").strip()
     ]
 
     if not valid_peaks:
@@ -303,7 +237,6 @@ def main() -> None:
         st.error(result["error"])
         return
 
-    # ── Ключевые показатели ───────────────────────────────────
     st.markdown("### 📊 Результаты расчета")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("🔬 RON (Иссл.)", result["ron"])
@@ -311,7 +244,6 @@ def main() -> None:
     c3.metric("📊 AKI (R+M)/2", result["aki"])
     c4.metric("📈 Чувствительность", result["sensitivity"])
 
-    # ── ГОСТ ──────────────────────────────────────────────────
     st.markdown("---")
     st.markdown("### 📋 Соответствие ГОСТ 32513-2013")
     a_content = result["piona"].get("A", {}).get("content", 0.0)
@@ -328,7 +260,6 @@ def main() -> None:
         })
     st.dataframe(pd.DataFrame(comparison_data), width="stretch", hide_index=True)
 
-    # ── PIONA ─────────────────────────────────────────────────
     st.markdown("---")
     st.markdown("### 📊 Групповой состав (PIONA)")
     tab1, tab2 = st.tabs(["Круговая диаграмма", "Таблица"])
@@ -348,17 +279,11 @@ def main() -> None:
             st.plotly_chart(fig_pie, width="stretch")
     with tab2:
         piona_table = pd.DataFrame([
-            {
-                "Класс": CLASS_NAMES[k],
-                "Содержание, %": v["content"],
-                "Ср. RON": v["avg_ron"],
-                "Ср. MON": v["avg_mon"],
-            }
+            {"Класс": CLASS_NAMES[k], "Содержание, %": v["content"], "Ср. RON": v["avg_ron"], "Ср. MON": v["avg_mon"]}
             for k, v in result["piona"].items() if v["content"] > 0
         ])
         st.dataframe(piona_table, width="stretch", hide_index=True)
 
-    # ── Детализация ───────────────────────────────────────────
     st.markdown("---")
     st.markdown("### 🔬 Детализация по компонентам")
     groups_df = pd.DataFrame(result["groups"])
@@ -367,17 +292,11 @@ def main() -> None:
         st.dataframe(
             groups_df[["name", "Класс", "content", "ron", "mon", "ron_contrib", "mon_contrib"]]
             .rename(columns={
-                "name": "Компонент",
-                "content": "Содерж., %",
-                "ron": "RON",
-                "mon": "MON",
-                "ron_contrib": "Вклад RON",
-                "mon_contrib": "Вклад MON",
+                "name": "Компонент", "content": "Содерж., %", "ron": "RON", "mon": "MON",
+                "ron_contrib": "Вклад RON", "mon_contrib": "Вклад MON",
             })
-            .sort_values(["Класс", "content"], ascending=[True, False])
-            .round(2),
-            width="stretch",
-            hide_index=True,
+            .sort_values(["Класс", "content"], ascending=[True, False]).round(2),
+            width="stretch", hide_index=True,
         )
 
     if result["unknown"]:
@@ -385,7 +304,6 @@ def main() -> None:
         for u in result["unknown"]:
             st.write(f"• {u}")
 
-    # ── Экспорт ───────────────────────────────────────────────
     st.markdown("---")
     st.markdown("### 💾 Экспорт результатов")
     export_df = pd.DataFrame([
@@ -398,29 +316,16 @@ def main() -> None:
     csv_bytes = export_df.to_csv(index=False).encode("utf-8-sig")
     st.download_button("⬇️ Скачать отчет (CSV)", csv_bytes, "octane_report.csv", "text/csv")
 
-    # ── Справка ───────────────────────────────────────────────
     with st.expander("📚 Справка по методике"):
         st.markdown("""
         **Методика расчета:**
         - Линейная модель смешения октановых чисел
         - PIONA-анализ по ASTM D6730 / ГОСТ Р 52709
         - LRI (линейный индекс удерживания) по Ван ден Дулу и Кратцу
-          с корректным учётом несмежных якорей
-
-        **Колонка:** HP-5 / DB-5 (5% фенил-метилполисилоксан)
-
-        **Порядок элюирования C8-ароматики:**
-        1. Этилбензол (LRI ~850)
-        2. п-Ксилол + м-Ксилол (co-elution, LRI ~868)
-        3. о-Ксилол (LRI ~885)
-
+        
         **Ограничения модели:**
-        - Линейная модель завышает RON для смесей с высокой долей ароматики;
-          для практического применения рекомендуется калибровка по ASTM D2699/D2700.
+        - Линейная модель завышает RON для смесей с высокой долей ароматики.
         - Авто-идентификация требует ≥2 н-алканов-якорей с content > 0.
-        - Групповые компоненты (i-C8, N-C7, A-C9+ и т.п.) в авто-ID не участвуют.
-
-        **Нормативы:** ГОСТ 32513-2013 "Топлива моторные. Бензин неэтилированный"
         """)
 
     st.markdown("---")
