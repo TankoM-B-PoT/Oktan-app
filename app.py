@@ -7,10 +7,21 @@ import pandas as pd
 import plotly.express as px
 from calculator import OctaneCalculator
 
-st.set_page_config(page_title="Расчет октанового числа", page_icon="⛽", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(
+    page_title="Расчет октанового числа", 
+    page_icon="⛽", 
+    layout="wide", 
+    initial_sidebar_state="collapsed"
+)
 
-CLASS_COLORS = {"P": "#2E86AB", "I": "#A23B72", "O": "#F18F01", "N": "#C73E1D", "A": "#3B1F2B", "OXY": "#44BBA4"}
-CLASS_NAMES = {"P": "Парафины", "I": "Изопарафины", "O": "Олефины", "N": "Нафтены", "A": "Ароматика", "OXY": "Кислородсодержащие"}
+CLASS_COLORS = {
+    "P": "#2E86AB", "I": "#A23B72", "O": "#F18F01",
+    "N": "#C73E1D", "A": "#3B1F2B", "OXY": "#44BBA4",
+}
+CLASS_NAMES = {
+    "P": "Парафины", "I": "Изопарафины", "O": "Олефины",
+    "N": "Нафтены", "A": "Ароматика", "OXY": "Кислородсодержащие",
+}
 GOST_STANDARDS = {
     "АИ-92":  {"RON_min": 92.0,  "MON_min": 82.0, "A_max": 25},
     "АИ-95":  {"RON_min": 95.0,  "MON_min": 85.0, "A_max": 30},
@@ -75,7 +86,13 @@ def main() -> None:
     st.markdown("---")
     st.markdown("### 📋 Ввод данных хроматограммы")
     
-    st.info("💡 **Как пользоваться:**\n1. Введите **tR** (мин) и **Концентрацию** (%)\n2. Назовите хотя бы 2 н-алкана-якоря (н-пентан, н-гексан, н-гептан, н-октан)\n3. Остальные **Названия оставьте пустыми** — их определит программа\n4. Нажмите **🤖 Автоидентификация**")
+    st.info(
+        "💡 **Как пользоваться:**\n"
+        "1. Введите **tR** (мин) и **Концентрацию** (%)\n"
+        "2. Назовите хотя бы 2 н-алкана-якоря (н-пентан, н-гексан, н-гептан, н-октан)\n"
+        "3. Остальные **Названия оставьте пустыми** — их определит программа\n"
+        "4. Нажмите **🤖 Автоидентификация**"
+    )
 
     peaks_df = pd.DataFrame(st.session_state.peaks_data or [], columns=PEAK_COLUMNS)
     edited_df = st.data_editor(
@@ -93,7 +110,9 @@ def main() -> None:
     st.caption(f"🔧 Якоря н-алканов: {calc.describe_anchors(st.session_state.peaks_data)}")
 
     st.markdown("---")
-    tolerance = st.number_input("Допуск ΔLRI (ед.)", min_value=1.0, max_value=30.0, value=10.0, step=0.5, key="lri_tolerance")
+    tolerance = st.number_input(
+        "Допуск ΔLRI (ед.)", min_value=1.0, max_value=30.0, value=10.0, step=0.5, key="lri_tolerance"
+    )
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -108,7 +127,11 @@ def main() -> None:
                 st.warning("⚠️ Таблица пуста")
             else:
                 try:
-                    updated, diagnostics = calc.identify_all_peaks(st.session_state.peaks_data, tolerance=st.session_state.get("lri_tolerance", 10.0), overwrite=overwrite)
+                    updated, diagnostics = calc.identify_all_peaks(
+                        st.session_state.peaks_data, 
+                        tolerance=st.session_state.get("lri_tolerance", 10.0), 
+                        overwrite=overwrite
+                    )
                     st.session_state.peaks_data = updated
                     st.session_state.last_diagnostics = diagnostics
                     bump_editor_version()
@@ -136,7 +159,13 @@ def main() -> None:
                     if "retention_time" not in csv_df.columns or "content" not in csv_df.columns:
                         st.error("CSV должен содержать столбцы: `retention_time`, `content`")
                     else:
-                        new_peaks = [{"retention_time": safe_float(row.get("retention_time")), "content": safe_float(row.get("content")), "name": safe_str(row.get("name", "")) if "name" in csv_df.columns else ""} for _, row in csv_df.iterrows()]
+                        new_peaks = [
+                            {
+                                "retention_time": safe_float(row.get("retention_time")), 
+                                "content": safe_float(row.get("content")), 
+                                "name": safe_str(row.get("name", "")) if "name" in csv_df.columns else ""
+                            } for _, row in csv_df.iterrows()
+                        ]
                         st.session_state.peaks_data = new_peaks
                         st.session_state.processed_csv = file_id
                         bump_editor_version()
@@ -148,6 +177,7 @@ def main() -> None:
         template = "retention_time,content,name\n3.45,1.50,н-пентан\n5.23,3.20,н-гексан\n8.12,2.10,н-гептан\n12.45,0.90,н-октан\n9.85,12.50,\n13.85,12.80,\n"
         st.download_button("💾 Шаблон CSV", data=template.encode("utf-8-sig"), file_name="chromatogram_template.csv", mime="text/csv")
 
+    # --- ДИАГНОСТИКА АВТОИДЕНТИФИКАЦИИ ---
     if st.session_state.get("last_diagnostics"):
         st.markdown("---")
         st.markdown("### 🔍 Результаты автоидентификации")
@@ -156,7 +186,11 @@ def main() -> None:
             display_cols = ["retention_time", "lri", "nearest", "deviation", "reason", "status"]
             available_cols = [c for c in display_cols if c in diag_df.columns]
             diag_display = diag_df[available_cols].copy()
-            rename_map = {"retention_time": "tR, мин", "lri": "LRI расч.", "nearest": "Ближайший", "deviation": "ΔLRI", "reason": "Статус", "status": "Код"}
+            rename_map = {
+                "retention_time": "tR, мин", "lri": "LRI расч.", 
+                "nearest": "Ближайший", "deviation": "ΔLRI", 
+                "reason": "Статус", "status": "Код"
+            }
             diag_display.columns = [rename_map[c] for c in available_cols]
             
             if "Код" in diag_display.columns:
@@ -177,8 +211,12 @@ def main() -> None:
                     for _, row in failed.iterrows():
                         st.write(f"• tR={row.get('retention_time', 0.0):.2f} мин — {row.get('reason', '')}")
 
+    # --- РАСЧЕТ ОКТАНОВОГО ЧИСЛА ---
     st.markdown("---")
-    valid_peaks = [p for p in st.session_state.peaks_data if (p.get("retention_time") or 0) > 0 and (p.get("content") or 0) > 0 and (p.get("name") or "").strip()]
+    valid_peaks = [
+        p for p in st.session_state.peaks_data 
+        if (p.get("retention_time") or 0) > 0 and (p.get("content") or 0) > 0 and (p.get("name") or "").strip()
+    ]
 
     if not valid_peaks:
         st.warning("⚠️ Нет данных для расчета. Заполните таблицу выше.")
@@ -204,13 +242,26 @@ def main() -> None:
     st.markdown("---")
     st.markdown("### 📋 Соответствие ГОСТ 32513-2013")
     a_content = result["piona"].get("A", {}).get("content", 0.0)
-    comparison_data = [{"Марка": mark, f"RON ≥ {std['RON_min']}": f"{'✅' if result['ron'] >= std['RON_min'] else '❌'} {result['ron']}", f"MON ≥ {std['MON_min']}": f"{'✅' if result['mon'] >= std['MON_min'] else '❌'} {result['mon']}", f"Ароматика ≤ {std['A_max']}%": f"{'✅' if a_content <= std['A_max'] else '❌'} {a_content}"} for mark, std in GOST_STANDARDS.items()]
+    comparison_data = []
+    for mark, std in GOST_STANDARDS.items():
+        ron_ok = "✅" if result["ron"] >= std["RON_min"] else "❌"
+        mon_ok = "✅" if result["mon"] >= std["MON_min"] else "❌"
+        a_ok = "✅" if a_content <= std["A_max"] else "❌"
+        comparison_data.append({
+            "Марка": mark,
+            f"RON ≥ {std['RON_min']}": f"{ron_ok} {result['ron']}",
+            f"MON ≥ {std['MON_min']}": f"{mon_ok} {result['mon']}",
+            f"Ароматика ≤ {std['A_max']}%": f"{a_ok} {a_content}",
+        })
     st.dataframe(pd.DataFrame(comparison_data), use_container_width=True, hide_index=True)
 
     st.markdown("---")
     st.markdown("### 📊 Групповой состав (PIONA)")
     tab1, tab2 = st.tabs(["Круговая диаграмма", "Таблица"])
-    piona_df = pd.DataFrame([{"Класс": CLASS_NAMES[k], "Содержание, %": v["content"], "Код": k} for k, v in result["piona"].items() if v["content"] > 0])
+    piona_df = pd.DataFrame([
+        {"Класс": CLASS_NAMES[k], "Содержание, %": v["content"], "Код": k}
+        for k, v in result["piona"].items() if v["content"] > 0
+    ])
     
     with tab1:
         if not piona_df.empty:
@@ -219,27 +270,66 @@ def main() -> None:
             fig_pie.update_layout(margin=dict(l=20, r=20, t=20, b=20), height=400)
             st.plotly_chart(fig_pie, use_container_width=True)
     with tab2:
-        piona_table = pd.DataFrame([{"Класс": CLASS_NAMES[k], "Содержание, %": v["content"], "Ср. RON": v["avg_ron"], "Ср. MON": v["avg_mon"]} for k, v in result["piona"].items() if v["content"] > 0])
+        piona_table = pd.DataFrame([
+            {"Класс": CLASS_NAMES[k], "Содержание, %": v["content"], "Ср. RON": v["avg_ron"], "Ср. MON": v["avg_mon"]}
+            for k, v in result["piona"].items() if v["content"] > 0
+        ])
         st.dataframe(piona_table, use_container_width=True, hide_index=True)
 
+    # --- ДЕТАЛИЗАЦИЯ ПО КОМПОНЕНТАМ (ИСПРАВЛЕНО) ---
     st.markdown("---")
     st.markdown("### 🔬 Детализация по компонентам")
     groups_df = pd.DataFrame(result["groups"])
+    
     if not groups_df.empty:
         groups_df["Класс"] = groups_df["class"].map(CLASS_NAMES)
-        st.dataframe(groups_df[["name", "Класс", "content", "ron", "mon", "ron_contrib", "mon_contrib"]].rename(columns={"name": "Компонент", "content": "Содерж., %", "ron": "RON", "mon": "MON", "ron_contrib": "Вклад RON", "mon_contrib": "Вклад MON"}).sort_values(["Класс", "content"], ascending=[True, False]).round(2), use_container_width=True, hide_index=True)
+        
+        # Безопасное переименование и сортировка с учетом реальных ключей из calculator.py
+        rename_map = {
+            "name": "Компонент", "content": "Содерж., %", 
+            "RON": "RON", "MON": "MON",
+            "ron_contrib": "Вклад RON", "mon_contrib": "Вклад MON"
+        }
+        
+        # Фильтруем только существующие столбцы
+        safe_cols = [c for c in rename_map.keys() if c in groups_df.columns]
+        if "Класс" in groups_df.columns: safe_cols.insert(1, "Класс")
+        
+        try:
+            final_df = (
+                groups_df[safe_cols]
+                .rename(columns=rename_map)
+                .sort_values(["Класс", "Содерж., %"], ascending=[True, False])
+                .round(2)
+            )
+            st.dataframe(final_df, use_container_width=True, hide_index=True)
+        except KeyError as e:
+            st.error(f"⚠️ Ошибка отображения таблицы: отсутствует столбец {e}")
+            st.dataframe(groups_df, use_container_width=True, hide_index=True)
 
-    if result["unknown"]:
+    if result.get("unknown"):
         st.warning("⚠️ Неидентифицированные компоненты (не учтены в расчете):")
-        for u in result["unknown"]: st.write(f"• {u}")
+        for u in result["unknown"]:
+            st.write(f"• {u}")
 
     st.markdown("---")
     st.markdown("### 💾 Экспорт результатов")
-    export_df = pd.DataFrame([{"Параметр": "RON (Исследовательское)", "Значение": result["ron"]}, {"Параметр": "MON (Моторное)", "Значение": result["mon"]}, {"Параметр": "AKI (R+M)/2", "Значение": result["aki"]}, {"Параметр": "Чувствительность (RON-MON)", "Значение": result["sensitivity"]}, {"Параметр": "Сумма концентраций, %", "Значение": result["total_content"]}])
+    export_df = pd.DataFrame([
+        {"Параметр": "RON (Исследовательское)", "Значение": result["ron"]},
+        {"Параметр": "MON (Моторное)", "Значение": result["mon"]},
+        {"Параметр": "AKI (R+M)/2", "Значение": result["aki"]},
+        {"Параметр": "Чувствительность (RON-MON)", "Значение": result["sensitivity"]},
+        {"Параметр": "Сумма концентраций, %", "Значение": result["total_content"]},
+    ])
     st.download_button("⬇️ Скачать отчет (CSV)", export_df.to_csv(index=False).encode("utf-8-sig"), "octane_report.csv", "text/csv")
 
     with st.expander("📚 Справка по методике"):
-        st.markdown("- Линейная модель смешения октановых чисел\n- PIONA-анализ по ASTM D6730 / ГОСТ Р 52709\n- LRI по Ван ден Дулу и Кратцу\n- Авто-ID требует ≥2 н-алканов-якорей с content > 0.")
+        st.markdown(
+            "- Линейная модель смешения октановых чисел\n"
+            "- PIONA-анализ по ASTM D6730 / ГОСТ Р 52709\n"
+            "- LRI по Ван ден Дулу и Кратцу\n"
+            "- Авто-ID требует ≥2 н-алканов-якорей с content > 0."
+        )
     st.markdown("---")
     st.caption("© 2026 • PIONA + LRI • ASTM D6730 / ГОСТ 32513 / ГОСТ Р 52709")
 
